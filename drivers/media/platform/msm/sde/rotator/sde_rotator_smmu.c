@@ -653,7 +653,7 @@ int sde_smmu_probe(struct platform_device *pdev)
 				sizeof(*dev->dma_parms), GFP_KERNEL);
 
 	dma_set_max_seg_size(dev, DMA_BIT_MASK(32));
-	dma_set_seg_boundary(dev, DMA_BIT_MASK(64));
+	dma_set_seg_boundary(dev, (unsigned long)DMA_BIT_MASK(64));
 
 	/*
 	 * Stage 1 smmu faults can be treated non-fatal.So, register
