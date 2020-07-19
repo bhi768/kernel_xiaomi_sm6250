@@ -163,6 +163,18 @@ struct spi_geni_master {
 	bool cmd_done;
 };
 
+/******************************************************************************
+ * *This functionis for get spi_geni_master->dev
+ * *spi_master: struct spi_device ->master
+ * *return: spi_geni_master->dev
+ ******************************************************************************/
+struct device *lct_get_spi_geni_master_dev(struct spi_master *spi)
+{
+	struct spi_geni_master *geni_mas = spi_master_get_devdata(spi);
+	return geni_mas->dev;
+}
+EXPORT_SYMBOL(lct_get_spi_geni_master_dev);
+
 static void spi_slv_setup(struct spi_geni_master *mas);
 
 static ssize_t show_slave_state(struct device *dev,
