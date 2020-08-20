@@ -1,4 +1,5 @@
 /* Copyright (c) 2015-2017, 2019 The Linux Foundation. All rights reserved.
+ * Copyright (C) 2020 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -111,6 +112,13 @@ static void vote_min(struct votable *votable, int client_id,
 			*eff_id = i;
 		}
 	}
+
+	if (strcmp(votable->name, "QG_WS") != 0) {
+		if(votable->votes[i].enabled)
+			pr_info("%s: val: %d\n", votable->client_strs[i],
+					votable->votes[i].value);
+	}
+
 	if (*eff_id == -EINVAL)
 		*eff_res = -EINVAL;
 }
@@ -393,7 +401,7 @@ int vote(struct votable *votable, const char *client_str, bool enabled, int val)
 		goto out;
 	}
 
-	pr_debug("%s: %s,%d voting %s of val=%d\n",
+	pr_info("%s: %s,%d voting %s of val=%d\n",
 		votable->name,
 		client_str, client_id, enabled ? "on" : "off", val);
 	switch (votable->type) {
@@ -417,19 +425,81 @@ int vote(struct votable *votable, const char *client_str, bool enabled, int val)
 	 */
 	if (!votable->voted_on
 			|| (effective_result != votable->effective_result)) {
+		if (strcmp(votable->name, "QG_WS") != 0) {
+			pr_info("%s: current vote is now %d voted by %s,%d, previous voted %d\n",
+				votable->name, effective_result,
+				get_client_str(votable, effective_id),
+				effective_id, votable->effective_result);
+		}
 		votable->effective_client_id = effective_id;
 		votable->effective_result = effective_result;
-		pr_debug("%s: effective vote is now %d voted by %s,%d\n",
-			votable->name, effective_result,
-			get_client_str(votable, effective_id),
-			effective_id);
-		if (votable->callback && !votable->force_active)
+		if (votable->callback && !votable->force_active
+				&& (votable->override_result == -EINVAL))
 			rc = votable->callback(votable, votable->data,
 					effective_result,
 					get_client_str(votable, effective_id));
 	}
 
 	votable->voted_on = true;
+out:
+	unlock_votable(votable);
+	return rc;
+}
+
+/**
+ * vote_override() -
+ *
+ * @votable:		The votable object
+ * @override_client:	The voting client that will override other client's
+ *			votes, that are already present. When force_active
+ *			and override votes are set on a votable, force_active's
+ *			client will have the higher priority and it's vote will
+ *			be the effective one.
+ * @enabled:		This provides a means for the override client to exclude
+ *			itself from election. This client's vote
+ *			(the next argument) will be considered only when
+ *			it has enabled its participation. When this is
+ *			set true, this will force a value on a MIN/MAX votable
+ *			irrespective of its current value.
+ * @val:		The vote value. This will be effective only if enabled
+ *			is set true.
+ * Returns:
+ *	The result of vote. 0 is returned if the vote
+ *	is successfully set by the overriding client, when enabled is set.
+ */
+int vote_override(struct votable *votable, const char *override_client,
+		  bool enabled, int val)
+{
+	int rc = 0;
+
+	if (!votable || !override_client)
+		return -EINVAL;
+
+	lock_votable(votable);
+	if (votable->force_active) {
+		votable->override_result = enabled ? val : -EINVAL;
+		goto out;
+	}
+        pr_debug("%s: %s, vote_override %s val=%d\n",
+                          votable->name,
+                          override_client,
+                          enabled ? "on" : "off",
+                          val);
+
+	if (enabled) {
+		rc = votable->callback(votable, votable->data,
+					val, override_client);
+		if (!rc) {
+			votable->override_client = override_client;
+			votable->override_result = val;
+		}
+	} else {
+		rc = votable->callback(votable, votable->data,
+			votable->effective_result,
+			get_client_str(votable, votable->effective_client_id));
+		votable->override_result = -EINVAL;
+	}
+
 out:
 	unlock_votable(votable);
 	return rc;

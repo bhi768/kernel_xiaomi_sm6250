@@ -1,4 +1,5 @@
 /* Copyright (c) 2017-2019 The Linux Foundation. All rights reserved.
+ * Copyright (C) 2020 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -523,6 +524,10 @@ static int smb1390_ilim_vote_cb(struct votable *votable, void *data,
 		vote(chip->disable_votable, ILIM_VOTER, false, 0);
 	}
 
+	/* Notify userspace ILIM changed */
+	 if (chip->cp_master_psy)
+		 power_supply_changed(chip->cp_master_psy);
+
 	return rc;
 }
 
@@ -546,6 +551,53 @@ static int smb1390_notifier_cb(struct notifier_block *nb,
 			schedule_work(&chip->status_change_work);
 		}
 		spin_unlock_irqrestore(&chip->status_change_lock, flags);
+
+		/*
+		 * If not already configured for triple chg, configure master
+		 * SMB1390 here for triple chg, if slave is detected.
+		 */
+		if (is_cps_available(chip) && !chip->smb_init_done) {
+			smb1390_dbg(chip, PR_INFO, "SMB1390 slave has registered, configure for triple charging\n");
+			rc = smb1390_triple_init_hw(chip);
+			if (rc < 0)
+				pr_err("Couldn't configure SMB1390 for triple-chg config rc=%d\n",
+					rc);
+		}
+	}
+
+	return NOTIFY_OK;
+}
+
+#define ILIM_NR			10
+#define ILIM_DR			8
+#define ILIM_FACTOR(ilim)	((ilim * ILIM_NR) / ILIM_DR)
+
+static void smb1390_configure_ilim(struct smb1390 *chip, int mode)
+{
+	int rc;
+	union power_supply_propval pval = {0, };
+
+	/* PPS adapter reply on the current advertised by the adapter */
+	if ((chip->pl_output_mode == POWER_SUPPLY_PL_OUTPUT_VPH)
+			&& (mode == POWER_SUPPLY_CP_PPS)) {
+		rc = power_supply_get_property(chip->usb_psy,
+				POWER_SUPPLY_PROP_PD_CURRENT_MAX, &pval);
+		if (rc < 0)
+			pr_err("Couldn't get PD CURRENT MAX rc=%d\n", rc);
+		else
+			vote(chip->ilim_votable, ICL_VOTER,
+					true, ILIM_FACTOR(pval.intval));
+	}
+
+	/* QC3.0/Wireless adapter rely on the settled AICL for USBMID_USBMID */
+	if ((chip->pl_input_mode == POWER_SUPPLY_PL_USBMID_USBMID)
+			&& (mode == POWER_SUPPLY_CP_HVDCP3)) {
+		rc = power_supply_get_property(chip->usb_psy,
+				POWER_SUPPLY_PROP_INPUT_CURRENT_SETTLED, &pval);
+		if (rc < 0)
+			pr_err("Couldn't get usb aicl rc=%d\n", rc);
+		else
+			vote(chip->ilim_votable, ICL_VOTER, true, pval.intval);
 	}
 
 	return NOTIFY_OK;
@@ -773,7 +825,10 @@ static int smb1390_get_prop(struct power_supply *psy,
 		}
 		break;
 	case POWER_SUPPLY_PROP_CP_ISNS:
-		rc = smb1390_get_isns(chip, val);
+		rc = smb1390_get_isns_master(chip, val);
+		break;
+	case POWER_SUPPLY_PROP_CP_ISNS_SLAVE:
+		rc = smb1390_get_isns_slave(chip, val);
 		break;
 	case POWER_SUPPLY_PROP_CP_TOGGLE_SWITCHER:
 		val->intval = 0;
@@ -789,10 +844,7 @@ static int smb1390_get_prop(struct power_supply *psy,
 			val->intval |= status;
 		break;
 	case POWER_SUPPLY_PROP_CP_ILIM:
-		rc = smb1390_read(chip, CORE_FTRIM_ILIM_REG, &status);
-		if (!rc)
-			val->intval = ((status & CFG_ILIM_MASK) * 100000)
-					+ 500000;
+		rc = smb1390_get_cp_ilim(chip, val);
 		break;
 	case POWER_SUPPLY_PROP_CHIP_VERSION:
 		val->intval = chip->pmic_rev_id->rev4;

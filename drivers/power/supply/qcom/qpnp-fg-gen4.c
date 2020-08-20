@@ -3484,10 +3484,13 @@ static void status_change_work(struct work_struct *work)
 	cycle_count_update(chip->counter, (u32)batt_soc >> 24,
 		fg->charge_status, fg->charge_done, input_present);
 
-	if (fg->charge_status != fg->prev_charge_status)
-		cap_learning_update(chip->cl, batt_temp, batt_soc,
+	if (fg->charge_status != fg->prev_charge_status) {
+		batt_soc_cp = div64_u64((u64)(u32)batt_soc * CENTI_FULL_SOC,
+					BATT_SOC_32BIT);
+		cap_learning_update(chip->cl, batt_temp, batt_soc_cp,
 			fg->charge_status, fg->charge_done, input_present,
 			qnovo_en);
+	}
 
 	rc = fg_gen4_charge_full_update(fg);
 	if (rc < 0)
